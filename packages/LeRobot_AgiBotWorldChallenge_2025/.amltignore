@@ -1,0 +1,10 @@
+*.pyc
+__pycache__/
+data
+weights
+wandb
+outputs
+shared_data
+shared_outputs
+Manipulation-Sim-Datasets
+.egg-info
