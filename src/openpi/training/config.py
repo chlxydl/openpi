@@ -27,7 +27,7 @@ import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
-
+import openpi.policies.agibot_policy as agibot_policy
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
 Filter: TypeAlias = nnx.filterlib.Filter
@@ -206,6 +206,124 @@ class FakeDataConfig(DataConfigFactory):
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         return DataConfig(repo_id=self.repo_id)
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotAgibotDataConfig(DataConfigFactory):
+    """
+    Config for Agibot dataset, with optional delta joint action conversion.
+    """
+    # use_delta_actions: bool = False  # whether to convert joint dimensions to deltas with respect to the current state.
+    # use_quantile_norm: bool = False  # whether to use quantile normalization.
+    use_delta_actions: bool = True  # whether to convert joint dimensions to deltas with respect to the current state.
+    use_quantile_norm: bool = True  # whether to use quantile normalization.
+    is_compute_norm: bool = False  # whether to compute norm stats.
+    input_mode: str = 'joint'  # 'ee', 'joint', 'ee_joint'. Determines which inputs to use from the dataset.
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # The repack transform is *only* applied to the data coming from the dataset,
+        # and *not* during inference. We can use it to make inputs from the dataset look
+        # as close as possible to those coming from the inference environment (e.g. match the keys).
+        # Below, we match the keys in the dataset (which we defined in the data conversion script) to
+        # the keys we use in our inference pipeline (defined in the inference script for libero).
+        # For your own dataset, first figure out what keys your environment passes to the policy server
+        # and then modify the mappings below so your dataset's keys get matched to those target keys.
+        # The repack transform simply remaps key names here.
+        print("#"*50)
+        print("model_config:", model_config)
+        print("#"*50)
+
+        if not self.is_compute_norm:
+            repack_transform = _transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            'observation.images.head': 'observation.images.cam2',
+                            'observation.images.hand_left': 'observation.images.cam4',
+                            'observation.images.hand_right': 'observation.images.cam3',
+                            "state": "state",
+                            "actions": "action",
+                            "prompt": "english_action_text",
+                            # "english_action_text": "english_action_text",
+                        }
+                    )
+                ]
+            )
+        else:
+            repack_transform = _transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "state": "state",
+                            "actions": "action",
+                        }
+                    )
+                ]
+            )
+        # The data transforms are applied to the data coming from the dataset *and* during inference.
+        # Below, we define the transforms for data going into the model (``inputs``) and the transforms
+        # for data coming out of the model (``outputs``) (the latter is only used during inference).
+        # We defined these transforms in `libero_policy.py`. You can check the detailed comments there for
+        # how to modify the transforms to match your dataset. Once you created your own transforms, you can
+        # replace the transforms below with your own.
+        if not self.is_compute_norm:
+            data_transforms = _transforms.Group(
+                inputs=[agibot_policy.AgibotInputs(action_dim=model_config.action_dim, model_type=model_config.model_type, input_mode=self.input_mode)],
+                outputs=[agibot_policy.AgibotOutputs(output_mode=self.input_mode)],
+            )
+        else:
+            data_transforms = _transforms.Group(
+                inputs=[agibot_policy.AgibotInputs(action_dim=model_config.action_dim, model_type=model_config.model_type, is_compute_norm=True, input_mode=self.input_mode)],
+                outputs=[agibot_policy.AgibotOutputs(output_mode=self.input_mode)],
+            )
+
+        # One additional data transform: pi0 models are trained on delta actions (relative to the first
+        # state in each action chunk). IF your data has ``absolute`` actions (e.g. target joint angles)
+        # you can uncomment the following line to convert the actions to delta actions. The only exception
+        # is for the gripper actions which are always absolute.
+        # In the example below, we would apply the delta conversion to the first 6 actions (joints) and
+        # leave the 7th action (gripper) unchanged, i.e. absolute.
+        # In Libero, the raw actions in the dataset are already delta actions, so we *do not* need to
+        # apply a separate delta conversion (that's why it's commented out). Choose whether to apply this
+        # transform based on whether your dataset uses ``absolute`` or ``delta`` actions out of the box.
+
+        # TODO(karl): comment this out once we have updated the Libero checkpoints to not use
+        # the delta action transform
+        if self.use_delta_actions:
+            if self.input_mode == 'joint':
+                delta_action_mask = [False, False] + [True] * 14
+            elif self.input_mode == 'ee':
+                delta_action_mask = [False, False] + [True] * 6 + [False] * 6
+            elif self.input_mode == 'ee_joint':
+                delta_action_mask = [False, False] + [True] * 14 + [True] * 6 + [False] * 6
+            # delta_action_mask = [False, False] + [True] * 14
+            print("#"*50)
+            print("use_delta_actions")
+            print("delta_action_mask:", delta_action_mask)
+            print("#"*50)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask, input_mode=self.input_mode)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask, output_mode=self.input_mode)],
+            )
+
+
+        # Model transforms include things like tokenizing the prompt and action targets
+        # You do not need to change anything here for your own dataset.
+
+        # Bug may happen here.
+        action_sequence_keys: Sequence[str] = ("action.right_arm_joints", )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        # We return all data transforms for training and inference. No need to change anything here.
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            use_quantile_norm=self.use_quantile_norm,
+            action_sequence_keys=action_sequence_keys,
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -775,12 +893,30 @@ _CONFIGS = [
     ),
     
     TrainConfig(
+        name="pi0_xxl_vla",
+        model=pi0_config.Pi0Config(pi05=False, action_horizon=50, discrete_state_input=False),
+        data=LeRobotAgibotDataConfig(
+            repo_id='/work/outputs/xxl_ds_1203/xxl_ds_1203',
+            is_compute_norm=False
+        ),
+        batch_size=64,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+    ),
+    
+    TrainConfig(
         name="pi05_base_torch",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
-        data=LeRobotLiberoDataConfig(
-            repo_id="physical-intelligence/libero",
-            base_config=DataConfig(prompt_from_task=True),
-            extra_delta_transform=False,
+        data=LeRobotAgibotDataConfig(
         ),
         batch_size=256,
         lr_schedule=_optimizer.CosineDecaySchedule(
@@ -792,7 +928,7 @@ _CONFIGS = [
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        pytorch_weight_path="/work/model.safetensors",
+        pytorch_weight_path="/work/pytorch_weight/fp32",
         num_train_steps=30_000,
     ),
     #

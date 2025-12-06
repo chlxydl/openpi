@@ -208,6 +208,7 @@ class DeltaActions(DataTransformFn):
     # can be smaller than the actual number of dimensions. If None, this transform is a no-op.
     # See `make_bool_mask` for more details.
     mask: Sequence[bool] | None
+    input_mode: str = 'joint' 
 
     def __call__(self, data: DataDict) -> DataDict:
         if "actions" not in data or self.mask is None:
@@ -230,6 +231,7 @@ class AbsoluteActions(DataTransformFn):
     # can be smaller than the actual number of dimensions. If None, this transform is a no-op.
     # See `make_bool_mask` for more details.
     mask: Sequence[bool] | None
+    output_mode: str = 'joint'  # '
 
     def __call__(self, data: DataDict) -> DataDict:
         if "actions" not in data or self.mask is None:

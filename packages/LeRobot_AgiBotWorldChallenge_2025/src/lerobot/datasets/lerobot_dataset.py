@@ -723,25 +723,30 @@ class LeRobotDataset(torch.utils.data.Dataset):
             item = {**item, **padding}
             for key, val in query_result.items():
                 item[key] = val
-                
-        if "observation.state" in item:
-            states_seq = item["observation.state"]                # (T, 30)
-            pad_key = "observation.state_is_pad"
-            pad_mask = item.get(pad_key, None)                    # (T,) 或 None
+
+        states = torch.cat([item['observation.right_arm_joints']], dim=-1)  # (30,)
+        item['state'] = states.clone().detach().contiguous()
+        action = torch.cat([item['action.right_arm_joints']], dim=-1)  # (30,)
+        item['action'] = action.clone().detach().contiguous()
+
+        # if "observation.state" in item:
+        #     states_seq = item["observation.state"]                # (T, 30)
+        #     pad_key = "observation.state_is_pad"
+        #     pad_mask = item.get(pad_key, None)                    # (T,) 或 None
  
-            # 写入新的 action（动作序列：形状 (T, 30)）
-            item["action"] = states_seq.clone().detach()          # (T, 30)
+        #     # 写入新的 action（动作序列：形状 (T, 30)）
+        #     item["action"] = states_seq.clone().detach()          # (T, 30)
  
-            # 写入新的 state（第一帧：形状 (30,)）——深拷贝，避免别名/视图
-            item["state"] = states_seq[0].clone().detach().contiguous()  # (30,)
+        #     # 写入新的 state（第一帧：形状 (30,)）——深拷贝，避免别名/视图
+        #     item["state"] = states_seq[0].clone().detach().contiguous()  # (30,)
  
  
-            # 写入新的 action_is_pad（与 action 序列长度一致）
-            if pad_mask is not None:
-                item["action_is_pad"] = pad_mask                  # (T,)
-            else:
-                # 如果没有 pad，默认全 False
-                item["action_is_pad"] = torch.zeros((states_seq.shape[0],), dtype=torch.bool)
+        #     # 写入新的 action_is_pad（与 action 序列长度一致）
+        #     if pad_mask is not None:
+        #         item["action_is_pad"] = pad_mask                  # (T,)
+        #     else:
+        #         # 如果没有 pad，默认全 False
+        #         item["action_is_pad"] = torch.zeros((states_seq.shape[0],), dtype=torch.bool)
 
         if len(self.meta.video_keys) > 0 and not self.COMPUTE_NORM:
             current_ts = item["timestamp"].item()

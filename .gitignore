@@ -3,6 +3,13 @@ assets/
 checkpoints/
 data/
 wandb/
+pytorch_weight/
+amlt_tools/
+
+# packages/LeRobot_AgiBotWorldChallenge_2025/
+shared_outputs/
+outputs/
+weights/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
