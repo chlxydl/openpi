@@ -64,6 +64,7 @@ class AssetsConfig:
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
     repo_id: str | None = None
+    repo_ids: Sequence[str] | None = None
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
@@ -166,6 +167,7 @@ class ModelTransformFactory(GroupFactory):
 class DataConfigFactory(abc.ABC):
     # The LeRobot repo id.
     repo_id: str = tyro.MISSING
+    repo_ids: Sequence[str] = tyro.MISSING
     # Determines how the assets will be loaded.
     assets: AssetsConfig = dataclasses.field(default_factory=AssetsConfig)
     # Base config that will be updated by the factory.
@@ -177,10 +179,12 @@ class DataConfigFactory(abc.ABC):
 
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
+        repo_ids = self.repo_ids if self.repo_ids is not tyro.MISSING else []
         asset_id = self.assets.asset_id or repo_id
         return dataclasses.replace(
             self.base_config or DataConfig(),
             repo_id=repo_id,
+            repo_ids=repo_ids,
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
             use_quantile_norm=model_config.model_type != ModelType.PI0,
@@ -291,7 +295,7 @@ class LeRobotAgibotDataConfig(DataConfigFactory):
         # the delta action transform
         if self.use_delta_actions:
             if self.input_mode == 'joint':
-                delta_action_mask = [False, False] + [True] * 14
+                delta_action_mask = [True] * 7 + [False]
             elif self.input_mode == 'ee':
                 delta_action_mask = [False, False] + [True] * 6 + [False] * 6
             elif self.input_mode == 'ee_joint':
@@ -624,7 +628,7 @@ class TrainConfig:
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
-    keep_period: int | None = 5000
+    keep_period: int | None = 1000
 
     # If true, will overwrite the checkpoint directory if it already exists.
     overwrite: bool = False
@@ -854,6 +858,11 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
+            repo_ids=[
+                "physical-intelligence/libero",
+                # You can add more repo ids here if your dataset is split across multiple repos.
+                # "my-org/my-other-dataset",
+            ],
             base_config=DataConfig(prompt_from_task=True),
             extra_delta_transform=False,
         ),
@@ -896,8 +905,27 @@ _CONFIGS = [
         name="pi0_xxl_vla",
         model=pi0_config.Pi0Config(pi05=False, action_horizon=50, discrete_state_input=False),
         data=LeRobotAgibotDataConfig(
-            repo_id='/work/outputs/xxl_ds_1203/xxl_ds_1203',
-            is_compute_norm=False
+            repo_id='',
+            repo_ids=[
+                # '/work/outputs/xxl_ds_1203/xxl_ds_1203', 
+                #       '/work/outputs/xxl_ds_1203/xxl_ds_1209/scenario_1',
+                #       '/work/outputs/xxl_ds_1203/xxl_ds_1209/scenario_2',
+                #       '/work/outputs/xxl_ds_1203/xxl_ds_1209/scenario_3',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1216/scenario_3/2025.12.8',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1216/scenario_3/2025.12.14',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1216/scenario_3/2025.12.15',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1216/scenario_2/2025.12.08',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1216/scenario_2/2025.12.09',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1216/scenario_2/2025.12.11',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1216/scenario_2/2025.12.12',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1216/scenario_2/2025.12.14',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1223/scenario_1',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1223/2025.12.22/scenario_4',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1223/2025.12.20/scenario_4',
+                      '/work/outputs/xxl_ds_1203/xxl_ds_1223/2025.12.16/scenario_3'
+                      ],
+            is_compute_norm=False,
+            use_delta_actions=True,
         ),
         batch_size=64,
         lr_schedule=_optimizer.CosineDecaySchedule(
@@ -911,6 +939,9 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=30_000,
+        num_workers=16,
+        save_interval=1000,
+        keep_period=2000,
     ),
     
     TrainConfig(

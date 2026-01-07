@@ -150,6 +150,26 @@ def create_torch_dataset(
 
     return dataset
 
+def create_torch_multi_dataset(
+    data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
+) -> Dataset:
+    """Create a dataset for training."""
+    repo_ids = data_config.repo_ids
+    print(repo_ids)
+
+    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_ids[0])
+    dataset = lerobot_dataset.MultiLeRobotDataset(
+        repo_ids=repo_ids,
+        delta_timestamps={
+            key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
+        },
+    )
+    logging.info(f'dataset length: {len(dataset)}')
+
+    if data_config.prompt_from_task:
+        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+
+    return dataset
 
 def create_rlds_dataset(
     data_config: _config.DataConfig,
@@ -299,7 +319,7 @@ def create_torch_data_loader(
             execute in the main process.
         seed: The seed to use for shuffling the data.
     """
-    dataset = create_torch_dataset(data_config, action_horizon, model_config)
+    dataset = create_torch_multi_dataset(data_config, action_horizon, model_config)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
     # Use TorchDataLoader for both frameworks
